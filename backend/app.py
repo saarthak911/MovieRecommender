@@ -1,13 +1,12 @@
-"""Flask API + static file server for the movie recommender site.
 
-Run:  python app.py      then open http://127.0.0.1:5000
-"""
 import os
+import re
 from pathlib import Path
 
 from flask import Flask, jsonify, request
 
 from model import Recommender, load_catalog
+from posters import PosterService
 
 FRONTEND = Path(__file__).resolve().parent.parent / "frontend"
 app = Flask(__name__, static_folder=str(FRONTEND), static_url_path="")
@@ -16,6 +15,22 @@ app.config["MAX_CONTENT_LENGTH"] = 256 * 1024  # histories are small; reject any
 _df, _source = load_catalog()
 model = Recommender(_df, _source)
 print(f"[movie-site] catalogue: {_source}, {model.n} movies, {len(model.genre_names)} genres")
+
+_data_dir = Path(os.environ.get("MOVIE_DATA_DIR") or Path(__file__).resolve().parent.parent / "data")
+posters = PosterService(_data_dir / "poster_cache.json", by_id=(_source == "tmdb_5000"))
+print(f"[movie-site] posters: {'on' if posters.enabled else 'off (set TMDB_API_KEY to enable)'}")
+
+
+@app.after_request
+def allow_local_frontends(resp):
+    """Let a page served from another local port (e.g. VS Code Live Server) call this API."""
+    origin = request.headers.get("Origin", "")
+    if re.fullmatch(r"http://(localhost|127\.0\.0\.1)(:\d+)?", origin):
+        resp.headers["Access-Control-Allow-Origin"] = origin
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Vary"] = "Origin"
+    return resp
 
 
 def _body():
@@ -30,7 +45,25 @@ def index():
 
 @app.get("/api/info")
 def info():
-    return jsonify({"source": model.source, "count": model.n, "genres": model.genre_names})
+    return jsonify({"source": model.source, "count": model.n, "genres": model.genre_names, "posters": posters.enabled})
+
+
+@app.post("/api/posters")
+def poster_urls():
+    """Body: {"ids": [movie ids]}  ->  {"posters": {"<id>": url or null}}"""
+    if not posters.enabled:
+        return jsonify({"enabled": False, "posters": {}})
+    ids = _body().get("ids")
+    items = []
+    for raw in (ids if isinstance(ids, list) else [])[:60]:
+        try:
+            idx = model.id_to_idx.get(int(raw))
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if idx is not None:
+            row = model.df.iloc[idx]
+            items.append({"id": int(row["id"]), "title": row["title"], "year": int(row["year"]) or None})
+    return jsonify({"enabled": True, "posters": {str(k): v for k, v in posters.get_many(items).items()}})
 
 
 @app.post("/api/home")

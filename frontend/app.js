@@ -59,8 +59,11 @@
     }
     return node;
   }
+  // Served by Flask (port 5000 or a real domain) -> same origin. Opened from another static
+  // server (VS Code Live Server on 5500, file://, ...) -> talk to the Flask API directly.
+  const API_BASE = window.CINEMATCH_API ?? (location.protocol === "file:" || !["", "5000"].includes(location.port) ? "http://127.0.0.1:5000" : "");
   async function api(path, body) {
-    const res = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
+    const res = await fetch(API_BASE + path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : undefined);
     if (!res.ok) throw new Error(`${path} → ${res.status}`);
     return res.json();
   }
@@ -85,7 +88,7 @@
   function movieCard(m) {
     const liked = reaction(m.id) === "like";
     return h("button", { class: "card", type: "button", "aria-label": `${m.title}${m.year ? ", " + m.year : ""}`, onclick: () => openMovie(m.id) },
-      h("div", { class: "poster", style: `--h:${hueFor(m.genres[0])}` },
+      h("div", { class: "poster", "data-id": m.id, style: `--h:${hueFor(m.genres[0])}` },
         h("span", { class: "rating" }, `★ ${m.rating.toFixed(1)}`),
         liked && h("span", { class: "badge-liked", "aria-label": "You liked this" }, "❤️"),
         h("span", { class: "ptitle" }, m.title),
@@ -112,6 +115,33 @@
   }
   function setView(...nodes) {
     view.replaceChildren(...nodes.filter(Boolean));
+    hydratePosters(view);
+  }
+
+  // ---------- posters (optional: needs TMDB_API_KEY on the server) ----------
+  // Cards always render with a coloured placeholder first; real posters fade in on top.
+  const posterCache = new Map(); // movie id -> url | null
+  let postersEnabled = false;
+  function applyPoster(node, url) {
+    if (!url) return;
+    const img = h("img", { src: url, alt: "", decoding: "async", referrerpolicy: "no-referrer", loading: node.classList.contains("poster") ? "lazy" : "eager" });
+    img.addEventListener("load", () => node.classList.add("has-img"));
+    img.addEventListener("error", () => img.remove()); // keep the placeholder if the image fails
+    node.prepend(img);
+  }
+  async function hydratePosters(root) {
+    if (!postersEnabled) return;
+    const nodes = [...root.querySelectorAll("[data-id]")].filter((n) => !n.dataset.posterDone);
+    nodes.forEach((n) => { n.dataset.posterDone = "1"; });
+    const need = [...new Set(nodes.map((n) => Number(n.dataset.id)))].filter((id) => !posterCache.has(id));
+    try {
+      for (let i = 0; i < need.length; i += 60) {
+        const chunk = need.slice(i, i + 60);
+        const data = await api("/api/posters", { ids: chunk });
+        chunk.forEach((id) => posterCache.set(id, data.posters[String(id)] ?? null));
+      }
+    } catch (err) { console.warn("posters unavailable", err); return; }
+    nodes.forEach((n) => applyPoster(n, posterCache.get(Number(n.dataset.id))));
   }
   function empty(msg) { return h("p", { class: "empty" }, msg); }
 
@@ -151,7 +181,7 @@
   }
   function showError(err) {
     console.error(err);
-    setView(empty("Couldn't reach the recommendation server. Is it running (python app.py)?"));
+    setView(empty("Couldn't reach the recommendation server. Open a terminal in the backend folder, run “python app.py”, then reload this page."));
   }
   function renderChips() {
     const mk = (label, pressed, fn) => h("button", { class: "chip", type: "button", "aria-pressed": String(pressed), onclick: fn }, label);
@@ -173,6 +203,7 @@
       const recent = [...state.events].reverse().find((e) => e.type === "view" && e.movie_id === id);
       if (!recent || Date.now() - recent.ts > 60_000) logEvent({ type: "view", movie_id: id });
       renderModal(data.movie, data.similar);
+      hydratePosters(modalBody);
       modal.hidden = false;
       document.body.style.overflow = "hidden";
       $("modal-close").focus();
@@ -194,13 +225,16 @@
 
     modalBody.replaceChildren(
       h("div", { class: "detail-hero", style: `--h:${hueFor(m.genres[0])}` },
-        h("h2", { id: "m-title" }, m.title),
-        h("div", { class: "facts" },
-          h("span", { class: "star" }, `★ ${m.rating.toFixed(1)}`),
-          h("span", null, `${m.votes.toLocaleString()} votes`),
-          m.year && h("span", null, m.year),
-          m.director && h("span", null, `Directed by ${m.director}`)),
-        h("div", { class: "tags" }, m.genres.map((g) => h("span", { class: "tag" }, g)))),
+        h("div", { class: "hero-flex" },
+          h("div", { class: "detail-poster", "data-id": m.id }),
+          h("div", { class: "hero-text" },
+            h("h2", { id: "m-title" }, m.title),
+            h("div", { class: "facts" },
+              h("span", { class: "star" }, `★ ${m.rating.toFixed(1)}`),
+              h("span", null, `${m.votes.toLocaleString()} votes`),
+              m.year && h("span", null, m.year),
+              m.director && h("span", null, `Directed by ${m.director}`)),
+            h("div", { class: "tags" }, m.genres.map((g) => h("span", { class: "tag" }, g)))))),
       h("div", { class: "detail-body" },
         h("p", null, m.overview || "No description available."),
         m.cast.length && h("p", { class: "credit" }, h("b", null, "Starring "), m.cast.join(", ")),
@@ -255,11 +289,12 @@
     try {
       const info = await api("/api/info");
       state.genres = info.genres;
-      if (info.source === "demo") {
-        const n = $("notice");
-        n.hidden = false;
-        n.replaceChildren("Demo catalogue (", String(info.count), " movies). Add ", h("code", null, "tmdb_5000_movies.csv"), " and ", h("code", null, "tmdb_5000_credits.csv"), " to the ", h("code", null, "data/"), " folder and restart to use the full TMDB 5000 dataset.");
-      }
+      postersEnabled = !!info.posters;
+      $("tmdb-credit").hidden = !postersEnabled;
+      const notes = [];
+      if (info.source === "demo") notes.push("Demo catalogue (", String(info.count), " movies). Add ", h("code", null, "tmdb_5000_movies.csv"), " and ", h("code", null, "tmdb_5000_credits.csv"), " to the ", h("code", null, "data/"), " folder and restart to use the full TMDB 5000 dataset. ");
+      if (!postersEnabled) notes.push("Posters are off: set the ", h("code", null, "TMDB_API_KEY"), " environment variable and restart the server to show them.");
+      if (notes.length) { const n = $("notice"); n.hidden = false; n.replaceChildren(...notes); }
     } catch (err) { return showError(err); }
     renderChips();
     showHome();
