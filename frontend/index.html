@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CineMatch – movies picked for you</title>
+  <meta name="description" content="A movie recommender that learns from the genres you pick, the movies you open and what you search.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="CineMatch home"><span class="brand-mark">▶</span> CineMatch</a>
+    <form class="search" role="search" id="search-form" autocomplete="off">
+      <label for="q" class="sr-only">Search movies, genres, actors or plots</label>
+      <input id="q" type="search" placeholder="Search titles, actors, genres, plots" maxlength="100">
+    </form>
+  </header>
+
+  <nav class="chips-wrap" aria-label="Genres">
+    <div class="chips" id="chips"></div>
+  </nav>
+
+  <main id="main" tabindex="-1">
+    <div id="notice" class="notice" hidden></div>
+    <div id="view"><p class="loading">Loading your picks…</p></div>
+  </main>
+
+  <footer class="footer">
+    <p>Your activity (views, likes, searches, genre taps) is stored only in this browser and sent with each request so the model can personalise results.
+      <button type="button" id="clear" class="linklike">Clear my history</button></p>
+    <p id="activity" class="muted"></p>
+  </footer>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="m-title">
+      <button type="button" class="close" id="modal-close" aria-label="Close details">×</button>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
